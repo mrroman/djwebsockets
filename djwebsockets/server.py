@@ -30,7 +30,7 @@ class WebSocketServer:
 
     @staticmethod
     def get_namespace(path):
-        for regex, ns in WebSocketServer.NameSpaces:
+        for regex in WebSocketServer.NameSpaces:
             reg = re.compile(regex)
             if reg.search(path) is not None:
                 cls = WebSocketServer.NameSpaces.get(regex, None)
@@ -53,23 +53,24 @@ class WebSocketServer:
 
         callbacks = self.get_callbacks(cls)
         close_handler = asyncio.Future()
-        send_handler = asyncio.Future()
-        ws = WebSocket(websocket, close_handler, send_handler)
+        send_queue = asyncio.Queue(loop=self.loop)
+        ws = WebSocket(websocket, close_handler, send_queue)
         self.websockets[id(websocket)] = ws
         callbacks["on_connect"](ws, path)
         if ws.closed:
             return
         while True:
             receivetask = asyncio.async(websocket.recv())
+            sendtask = asyncio.async(send_queue.get())
             connection_closed = websocket.connection_closed
-            done, pending = yield from asyncio.wait([receivetask, close_handler, send_handler, connection_closed], return_when=asyncio.FIRST_COMPLETED)
-            if send_handler in done:
+            done, pending = yield from asyncio.wait([receivetask, close_handler, sendtask, connection_closed], return_when=asyncio.FIRST_COMPLETED)
+            if sendtask in done:
                 try:
-                    yield from websocket.send(send_handler.result())
+                    yield from websocket.send(sendtask.result())
                 except KeyError:
                     pass
-                send_handler = asyncio.Future()
-                ws.send_handler = send_handler
+            else:
+                sendtask.cancel()
 
             if receivetask in done:
                 try:
